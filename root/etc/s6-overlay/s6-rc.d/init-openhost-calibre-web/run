@@ -158,11 +158,21 @@ if [ ! -f "$OPENHOST_INIT_SENTINEL" ]; then
     # Run cps.py -s as the abc user so any incidental file ownership
     # (e.g. a stray .key write) is correct. CALIBRE_DBPATH must be
     # exported because cps.py reads it via os.environ at import time.
-    if ! CALIBRE_DBPATH="$CONFIG_DIR" s6-setuidgid abc \
-        /lsiopy/bin/python3 /app/calibre-web/cps.py -s "admin:$NEW_PASSWORD" >/dev/null; then
-        echo "[init-openhost] cps.py -s failed; aborting before writing password file"
+    # We `cd /app/calibre-web` first because cps.py imports the `cps`
+    # package by relative path; running from any other CWD raises
+    # ModuleNotFoundError. Capture stdout+stderr to a log file rather
+    # than discarding them so first-boot failures show up in the
+    # container logs.
+    CPS_LOG="$CONFIG_DIR/.openhost-init-cps.log"
+    if ! (cd /app/calibre-web && CALIBRE_DBPATH="$CONFIG_DIR" s6-setuidgid abc \
+        /lsiopy/bin/python3 /app/calibre-web/cps.py -s "admin:$NEW_PASSWORD" \
+        >"$CPS_LOG" 2>&1); then
+        echo "[init-openhost] cps.py -s failed; output follows:"
+        cat "$CPS_LOG" || true
+        echo "[init-openhost] aborting before writing password file"
         exit 1
     fi
+    rm -f "$CPS_LOG"
 
     # Write the password atomically: write to a tmp file with restrictive
     # perms, then rename. The umask covers any tmp-file race window where

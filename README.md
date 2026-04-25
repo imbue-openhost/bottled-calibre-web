@@ -66,10 +66,11 @@ admin UI.
   User").
 - **Recovery.** The randomised admin password is stored in
   `<host>/data/app_data/calibre-web/config/admin-password.txt` (mode 0600,
-  owned by the container's PUID). If the auth-proxy ever gets wedged
-  and you can't log in via SSO, this is your escape hatch — read the
-  file from the host (the OpenHost shell, `cat $OPENHOST_APP_DATA_DIR/config/admin-password.txt`)
-  and use the password at `/login`.
+  owned by the LSIO `abc` user, which defaults to UID 911). If the
+  auth-proxy ever gets wedged and you can't log in via SSO, this is
+  your escape hatch — read the file from the host (the OpenHost shell,
+  `cat $OPENHOST_APP_DATA_DIR/config/admin-password.txt`) and use the
+  password at `/login`.
 
 ## Manifest
 
