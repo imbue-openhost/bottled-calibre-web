@@ -1,0 +1,35 @@
+[app]
+name = "calibre-web"
+version = "0.1.0"
+description = "Calibre-Web ebook server with OpenHost owner SSO"
+
+[runtime.container]
+image = "Dockerfile"
+# Port 8080 is the auth-proxy sidecar inside the container. Calibre-Web
+# itself binds 8083 internally; the sidecar terminates the OpenHost
+# router's connection and forwards there with `X-Openhost-User: admin`
+# stamped for owner-authenticated requests.
+port = 8080
+
+[routing]
+# /robots.txt is one of the few Calibre-Web routes that returns 200 to
+# unauthenticated requests without redirecting. We use it as a cheap
+# liveness signal so the OpenHost router doesn't trigger
+# config_allow_anonymous on a more sensitive path.
+health_check = "/robots.txt"
+# Calibre-Web supports both owner SSO (via the auth-proxy stamping
+# `X-Openhost-User: admin`) AND username/password login for invited
+# readers, so the entire app needs to be reachable to anonymous traffic.
+# Authentication then happens at the application layer.
+public_paths = ["/"]
+
+[resources]
+# Default LSIO Calibre-Web image is hefty (Ubuntu noble + ImageMagick +
+# Python 3 + Calibre-Web's own Python deps), and ImageMagick gets
+# spawned for thumbnail generation on each cover. 768 MiB is what the
+# upstream documentation recommends for "small library" deployments.
+memory_mb = 768
+cpu_millicores = 500
+
+[data]
+app_data = true

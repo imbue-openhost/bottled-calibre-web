@@ -1,0 +1,20 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+#
+# Auth-proxy sidecar for Calibre-Web. Verifies the visitor's zone_auth JWT
+# (signed by the OpenHost router) and stamps X-Openhost-User: admin on
+# proxied requests when the claim sub == "owner". Calibre-Web, configured
+# with config_allow_reverse_proxy_header_login = 1 and a header name of
+# X-Openhost-User, treats that as an authenticated session for the
+# admin user. Non-owner traffic falls through to Calibre-Web's normal
+# username/password login.
+#
+# We run on 0.0.0.0:8083 (the public port the OpenHost router talks to)
+# and forward to Calibre-Web on 127.0.0.1:8084. Calibre-Web is configured
+# (in init-openhost-calibre-web) to bind 127.0.0.1:8084 only, so external
+# traffic must traverse the sidecar to reach it.
+
+# OPENHOST_ROUTER_URL is required by auth_proxy.py to fetch the router's
+# JWKS for JWT verification. The OpenHost runtime injects it via
+# /etc/s6-overlay/scripts; with-contenv brings env vars into our shell.
+exec /opt/auth-venv/bin/python3 /app/auth_proxy.py

@@ -1,0 +1,195 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+#
+# OpenHost-specific Calibre-Web init.
+#
+# Runs after init-calibre-web-config (which materialises /config/app.db on
+# first boot via `cps.py -d`) and before svc-calibre-web starts. Idempotent:
+# re-runs on every container start so we always converge to the
+# OpenHost-required settings, even if a user has stomped them through the
+# admin UI.
+#
+# Persistent layout (note: /config and /books are symlinks created in the
+# Dockerfile pointing at OPENHOST_APP_DATA_DIR's bind-mounted subdirs):
+#
+#   /config/app.db                  - Calibre-Web's settings/users sqlite db
+#   /config/admin-password.txt      - generated random admin password
+#   /config/.openhost-initialised   - sentinel; presence means we already
+#                                     ran the first-boot password reset
+#   /books/metadata.db              - empty Calibre library, seeded on
+#                                     first boot from the schema bundled
+#                                     at /app/calibre_metadata_sqlite.sql
+#
+# Responsibilities:
+#   1. Make sure an empty Calibre library exists at /books, so calibre-web
+#      can be configured to point at it (otherwise the wizard's
+#      "DB Location is not Valid" check fails).
+#   2. Patch /config/app.db settings:
+#        - config_calibre_dir = /books
+#        - config_allow_reverse_proxy_header_login = 1
+#        - config_reverse_proxy_login_header_name = X-Openhost-User
+#   3. Randomise the admin user's password on first boot and persist it
+#      to /config/admin-password.txt. This removes the upstream default
+#      of admin/admin123, which is a security disaster on a public-facing
+#      app. Owner SSO via the auth-proxy is the intended login path; the
+#      random password is an emergency recovery credential only.
+
+set -e
+
+APP_DB=/config/app.db
+METADATA_DB=/books/metadata.db
+ADMIN_PASSWORD_FILE=/config/admin-password.txt
+OPENHOST_INIT_SENTINEL=/config/.openhost-initialised
+
+# /config and /books are symlinks created at image-build time pointing at
+# the OpenHost-bind-mounted /data/app_data/calibre-web/{config,books}.
+# Make sure both target directories exist (they may have been wiped by
+# an operator before the container restarted, or this may be the first
+# container start with a fresh OPENHOST_APP_DATA_DIR mount).
+mkdir -p /config /books
+
+# Ownership: LSIO runs calibre-web as user/group `abc` (PUID/PGID,
+# defaulting to 1000:1000 in our manifest). Make sure both /config and
+# /books are owned by `abc` so calibre-web can read+write them. `lsiown`
+# is LSIO's wrapper that respects PUID/PGID.
+#
+# We follow symlinks (-RL) because /config and /books *are* symlinks
+# at this point; without -L, lsiown would chown the link itself which
+# is a no-op on Linux.
+if command -v lsiown >/dev/null 2>&1; then
+    lsiown -R abc:abc /config /books
+else
+    chown -R "${PUID:-1000}:${PGID:-1000}" /config /books 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------------
+# Step 1: Materialise an empty Calibre library at /books if not present.
+# ---------------------------------------------------------------------------
+# Calibre-Web requires metadata.db to exist before it'll accept the library
+# path. Without this, the admin "Database Location is not Valid" check
+# blocks the rest of the configuration, and an unauthenticated visitor
+# would land on the setup wizard instead of the login form.
+#
+# Calibre's metadata schema uses two custom SQL functions (title_sort,
+# uuid4) inside CREATE TRIGGER bodies. We register them as Python sqlite3
+# functions before executing the schema so the triggers compile cleanly.
+# Calibre-Web registers functionally equivalent versions when it connects,
+# so the runtime behaviour matches.
+if [ ! -f "$METADATA_DB" ]; then
+    echo "[init-openhost] creating empty Calibre library at $METADATA_DB"
+    python3 - <<'PY'
+import os
+import sqlite3
+import sys
+import uuid
+
+schema_path = "/app/calibre_metadata_sqlite.sql"
+db_path = "/books/metadata.db"
+
+# Remove any partial db from an interrupted previous run so we start clean.
+if os.path.exists(db_path):
+    os.unlink(db_path)
+
+conn = sqlite3.connect(db_path)
+try:
+    conn.create_function("title_sort", 1, lambda t: t or "")
+    conn.create_function("uuid4", 0, lambda: str(uuid.uuid4()))
+    with open(schema_path, "r", encoding="utf-8") as fh:
+        schema = fh.read()
+    conn.executescript(schema)
+    conn.commit()
+finally:
+    conn.close()
+PY
+    if command -v lsiown >/dev/null 2>&1; then
+        lsiown abc:abc "$METADATA_DB"
+    else
+        chown "${PUID:-1000}:${PGID:-1000}" "$METADATA_DB" 2>/dev/null || true
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Step 2: Patch /config/app.db with OpenHost-required settings.
+# ---------------------------------------------------------------------------
+# We only proceed if app.db exists. The init-calibre-web-config oneshot
+# (which we depend on) runs `cps.py -d` to create app.db on first boot,
+# so this should always be true by the time we run. If it isn't, we log
+# and abort so the operator can see the problem.
+if [ ! -f "$APP_DB" ]; then
+    echo "[init-openhost] $APP_DB missing; cannot patch settings"
+    echo "[init-openhost] (this is unexpected — init-calibre-web-config should have seeded it)"
+    exit 1
+fi
+
+# Calibre-Web stays on its default port 8083 inside the container. The
+# LSIO base image's svc-calibre-web service has a readiness probe
+# (`nc -z localhost 8083`) hard-wired to that port. The auth-proxy
+# sidecar listens publicly on 0.0.0.0:8080 (the port advertised in
+# openhost.toml) and forwards to calibre-web on 127.0.0.1:8083. The
+# OpenHost router only routes traffic to the openhost.toml-declared
+# port, so calibre-web's 8083 is unreachable from outside the
+# container regardless of the bind address.
+echo "[init-openhost] patching $APP_DB settings"
+sqlite3 "$APP_DB" <<'EOS'
+UPDATE settings SET
+    config_calibre_dir = '/books',
+    config_allow_reverse_proxy_header_login = 1,
+    config_reverse_proxy_login_header_name = 'X-Openhost-User'
+WHERE id = 1;
+EOS
+
+# ---------------------------------------------------------------------------
+# Step 3: Randomise the admin password on first boot.
+# ---------------------------------------------------------------------------
+# Calibre-Web's cps.py supports a `-s user:pass` flag that resets the named
+# user's password and exits. We invoke it once on first boot, store the
+# resulting plaintext to /config/admin-password.txt (chmod 600), and drop
+# the sentinel so we don't reset it on every restart.
+#
+# Why not just leave admin/admin123? Calibre-Web is publicly reachable
+# via the OpenHost router (public_paths = ["/"]). The auth-proxy sidecar
+# only stamps X-Openhost-User for authenticated owners; anonymous traffic
+# still hits the upstream login form, where admin/admin123 would be a
+# trivial takeover.
+if [ ! -f "$OPENHOST_INIT_SENTINEL" ]; then
+    echo "[init-openhost] first-boot: randomising admin password"
+    # 32 chars of urlsafe base64 (~24 bytes of entropy). Plenty for a
+    # password we never expect a human to type.
+    NEW_PASSWORD=$(head -c 24 /dev/urandom | base64 | tr -d '\n=+/' | head -c 32)
+    if [ -z "$NEW_PASSWORD" ] || [ ${#NEW_PASSWORD} -lt 16 ]; then
+        echo "[init-openhost] failed to generate random password (got ${#NEW_PASSWORD} chars)"
+        exit 1
+    fi
+
+    # Run cps.py -s as the abc user so any incidental file ownership
+    # (e.g. a stray .key write) is correct. CALIBRE_DBPATH must be
+    # exported because cps.py reads it via os.environ at import time.
+    if ! CALIBRE_DBPATH=/config s6-setuidgid abc \
+        /lsiopy/bin/python3 /app/calibre-web/cps.py -s "admin:$NEW_PASSWORD" >/dev/null; then
+        echo "[init-openhost] cps.py -s failed; aborting before writing password file"
+        exit 1
+    fi
+
+    # Write the password atomically: write to a tmp file with restrictive
+    # perms, then rename. The umask covers any tmp-file race window where
+    # a concurrent process could read a partially-written file.
+    umask 077
+    printf 'admin\n%s\n' "$NEW_PASSWORD" > "$ADMIN_PASSWORD_FILE.tmp"
+    mv -f "$ADMIN_PASSWORD_FILE.tmp" "$ADMIN_PASSWORD_FILE"
+    if command -v lsiown >/dev/null 2>&1; then
+        lsiown abc:abc "$ADMIN_PASSWORD_FILE"
+    else
+        chown "${PUID:-1000}:${PGID:-1000}" "$ADMIN_PASSWORD_FILE" 2>/dev/null || true
+    fi
+    chmod 600 "$ADMIN_PASSWORD_FILE"
+
+    # Drop the sentinel last so a crash partway through this block leaves
+    # us in a state that re-attempts the password reset on next boot.
+    touch "$OPENHOST_INIT_SENTINEL"
+    if command -v lsiown >/dev/null 2>&1; then
+        lsiown abc:abc "$OPENHOST_INIT_SENTINEL"
+    fi
+    echo "[init-openhost] admin password reset; saved to $ADMIN_PASSWORD_FILE"
+fi
+
+echo "[init-openhost] init complete"
