@@ -157,28 +157,31 @@ if [ ! -f "$OPENHOST_INIT_SENTINEL" ]; then
     # We use Python because bash's $RANDOM is only 15 bits and not
     # cryptographically secure. The `secrets` module pulls from
     # /dev/urandom and gives us the bias-free choice we need.
-    NEW_PASSWORD=$(python3 -c '
+    # Use a heredoc on stdin rather than -c '...' so we don't have to
+    # worry about quoting hell with apostrophes in the comments.
+    NEW_PASSWORD=$(python3 <<'PY'
 import secrets
 import string
 
-# 24 random alphanumeric chars (no '/' '+' '=' so the password is
+# 24 random alphanumeric chars (no /, +, = so the password is
 # easy to copy/paste through CLIs and YAML).
 alphabet = string.ascii_letters + string.digits
 random_part = "".join(secrets.choice(alphabet) for _ in range(24))
 
-# Guaranteed coverage of every character class Calibre-Web's default
+# Guaranteed coverage of every character class Calibre-Web default
 # policy enforces: uppercase, lowercase, digit, and special.
 required = ["A", "a", "0", "!"]
 
-# Splice the required chars into deterministic positions inside the
+# Splice the required chars into random positions inside the
 # random part so an observer of the password format learns nothing
 # about the random component, but the policy is satisfied
-# regardless of what `secrets.choice` returned.
+# regardless of what secrets.choice returned.
 combined = list(random_part)
 for char in required:
     combined.insert(secrets.randbelow(len(combined) + 1), char)
 print("".join(combined))
-')
+PY
+)
     if [ -z "$NEW_PASSWORD" ] || [ ${#NEW_PASSWORD} -lt 20 ]; then
         echo "[init-openhost] failed to generate random password (got ${#NEW_PASSWORD} chars)"
         exit 1
