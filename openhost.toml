@@ -12,11 +12,12 @@ image = "Dockerfile"
 port = 8080
 
 [routing]
-# /robots.txt is one of the few Calibre-Web routes that returns 200 to
-# unauthenticated requests without redirecting. We use it as a cheap
-# liveness signal so the OpenHost router doesn't trigger
-# config_allow_anonymous on a more sensitive path.
-health_check = "/robots.txt"
+# /login is one of the few Calibre-Web routes that returns 200 to
+# unauthenticated requests without redirecting. The catch-all `/`
+# returns a 302 to /login, which the OpenHost router treats as
+# "alive but redirecting" — fine for liveness but `/login` is more
+# explicit and avoids any future router behavior change.
+health_check = "/login"
 # Calibre-Web supports both owner SSO (via the auth-proxy stamping
 # `X-Openhost-User: admin`) AND username/password login for invited
 # readers, so the entire app needs to be reachable to anonymous traffic.

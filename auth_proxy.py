@@ -278,14 +278,15 @@ class AuthProxyHandler(BaseHTTPRequestHandler):
 
     # Route request logs through our logger so they're interleaved with
     # the module's own log lines, and suppress logs for Calibre-Web's
-    # /robots.txt so the OpenHost router's liveness probe doesn't flood
-    # the container log with ~1 line/second. /robots.txt is one of
-    # Calibre-Web's few endpoints that returns 200 for unauthenticated
-    # requests without redirecting, so it's the cheapest health-check
-    # surface.
+    # /login when the OpenHost router probes it (HEAD requests with no
+    # cookies) so the ~1/second liveness traffic doesn't drown out
+    # interesting log lines. We deliberately log GET /login from real
+    # users — it's the username/password form, and access patterns
+    # there are useful to see.
     def log_message(self, format: str, *args) -> None:  # noqa: A002, N802
         path = getattr(self, "path", "")
-        if path.startswith("/robots.txt"):
+        command = getattr(self, "command", "")
+        if path.startswith("/login") and command == "HEAD":
             return
         log.info("%s - " + format, self.address_string(), *args)
 
