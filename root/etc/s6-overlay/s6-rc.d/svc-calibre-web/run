@@ -1,0 +1,26 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+#
+# OpenHost-overridden replacement for LSIO's svc-calibre-web/run.
+#
+# We export CALIBRE_DBPATH from OPENHOST_APP_DATA_DIR/config instead of
+# the LSIO-default /config, so Calibre-Web reads/writes its app.db on
+# the OpenHost-bind-mounted persistent volume. Everything else
+# (s6-notifyoncheck readiness probe, the upstream cps.py invocation
+# under the abc user) matches upstream.
+#
+# See root/etc/s6-overlay/s6-rc.d/init-calibre-web-config/run for the
+# matching first-boot init that lives at the same persistent path.
+
+PERSIST="${OPENHOST_APP_DATA_DIR:-/data/app_data/calibre-web}"
+export CALIBRE_DBPATH="$PERSIST/config"
+
+# `cd /app/calibre-web` ensures the Calibre-Web source tree is in the
+# Python module search path (cps.py imports cps as a package).
+# `s6-notifyoncheck` polls `nc -z localhost 8083` until it succeeds,
+# at which point s6 considers svc-calibre-web "up" and dependent
+# services (svc-auth-proxy) are allowed to start. The -n 300 -w 1000
+# values mirror upstream LSIO's tuning for slow first-boot scenarios.
+exec \
+    s6-notifyoncheck -d -n 300 -w 1000 -c "nc -z localhost 8083" \
+        cd /app/calibre-web s6-setuidgid abc python3 /app/calibre-web/cps.py

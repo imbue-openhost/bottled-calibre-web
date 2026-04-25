@@ -6,26 +6,28 @@ FROM lscr.io/linuxserver/calibre-web:0.6.26-ls379
 # OpenHost bind-mounts the app's persistent data dir at
 # /data/app_data/calibre-web inside the container. The LSIO base image
 # expects all of Calibre-Web's writable state at /config (declared as
-# VOLUME), and we want our books library at /books. Replace both paths
-# with symlinks pointing into the persistent OpenHost mount BEFORE the
-# container's first boot, so:
+# `VOLUME /config`, which makes the path unwritable during `podman
+# build` and forces an anonymous Podman volume on every container
+# recreate — exactly what we don't want for a long-lived stateful app).
 #
-#   1. The image's `VOLUME /config` directive resolves to the persistent
-#      bind-mounted target rather than spawning an anonymous Podman
-#      volume that would silently lose data on container recreate.
-#   2. LSIO's init-calibre-web-config and svc-calibre-web see /config
-#      and /books at the paths they hard-code, but writes go to the
-#      OpenHost-managed persistent storage.
+# We can't delete /config in a RUN step because the VOLUME declaration
+# overlays it with a tmpfs during the build. We can't remove the
+# VOLUME directive from a child image either. The trick: override the
+# LSIO init scripts at runtime so Calibre-Web reads/writes
+# /data/app_data/calibre-web/config (and /data/app_data/calibre-web/books
+# for the library) directly, bypassing /config entirely. The LSIO
+# /config tmpfs continues to exist but is never used; everything that
+# matters lives under the persistent bind-mount.
 #
-# We pre-create /data/app_data/calibre-web/{config,books} so the
-# symlinks aren't dangling at image-build time. At runtime, OpenHost's
-# bind-mount at /data/app_data/calibre-web will overlay these
-# directories and the symlink keeps resolving to the same
-# in-container path.
-RUN rm -rf /config /books \
- && mkdir -p /data/app_data/calibre-web/config /data/app_data/calibre-web/books \
- && ln -s /data/app_data/calibre-web/config /config \
- && ln -s /data/app_data/calibre-web/books /books
+# This also nicely sidesteps the "/books doesn't exist in the LSIO
+# image" issue — we never need that path; the persistent path is
+# what calibre-web actually writes to.
+#
+# See:
+#   - root/etc/s6-overlay/s6-rc.d/init-calibre-web-config/run
+#     (overrides LSIO's init to use the persistent path)
+#   - root/etc/s6-overlay/s6-rc.d/svc-calibre-web/run
+#     (overrides LSIO's service start to set CALIBRE_DBPATH there)
 
 # Runtime additions on top of the LSIO image:
 #
@@ -83,12 +85,15 @@ COPY calibre_metadata_sqlite.sql /app/calibre_metadata_sqlite.sql
 # generated s6 bundle.
 COPY root/ /
 
-# Ensure the run scripts are executable (COPY preserves bits, but it
-# doesn't hurt to be explicit, and CI/git-on-Windows checkouts may strip
-# them).
+# Ensure all run scripts are executable. COPY preserves bits, but
+# CI/git-on-Windows checkouts can strip them, so we re-assert
+# explicitly. Every script we ship — both our own services and our
+# overrides of LSIO's — needs +x so s6 can exec them.
 RUN chmod +x \
         /etc/s6-overlay/s6-rc.d/init-openhost-calibre-web/run \
-        /etc/s6-overlay/s6-rc.d/svc-auth-proxy/run
+        /etc/s6-overlay/s6-rc.d/svc-auth-proxy/run \
+        /etc/s6-overlay/s6-rc.d/init-calibre-web-config/run \
+        /etc/s6-overlay/s6-rc.d/svc-calibre-web/run
 
 # The base image already declares EXPOSE 8083, but we listen externally
 # on 8080 (the auth-proxy port). Add 8080 to the exposed-port metadata

@@ -28,19 +28,28 @@ admin/user management.
 ## Persistent layout
 
 OpenHost bind-mounts the app's data directory at `/data/app_data/calibre-web`
-inside the container. The image symlinks the LSIO-expected paths into it:
+inside the container. The LSIO image normally writes everything to
+`/config`, but `/config` is a `VOLUME` in the upstream Dockerfile —
+which Podman would back with an anonymous volume that disappears on
+container recreate. To keep state across redeploys, we override the
+LSIO `init-calibre-web-config` and `svc-calibre-web` run scripts so
+Calibre-Web reads/writes the persistent path directly:
 
 ```
-/config/                  -> /data/app_data/calibre-web/config/
-  app.db                    Calibre-Web settings + users (SQLite)
-  admin-password.txt        Generated random admin password (recovery)
-  .openhost-initialised     Sentinel; presence means first-boot done
-  ...                       Other LSIO-managed config files
-
-/books/                   -> /data/app_data/calibre-web/books/
-  metadata.db               Calibre library catalogue (SQLite)
-  <Author>/<Title>/...      Book files added through the web UI
+/data/app_data/calibre-web/
+  config/
+    app.db                  Calibre-Web settings + users (SQLite)
+    admin-password.txt      Generated random admin password (recovery)
+    .openhost-initialised   Sentinel; presence means first-boot done
+    client_secrets.json     Stub for Google Drive integration (LSIO)
+    .key                    Calibre-Web's encryption key (LSIO)
+  books/
+    metadata.db             Calibre library catalogue (SQLite)
+    <Author>/<Title>/...    Book files added through the web UI
 ```
+
+The container's own `/config` directory is a tmpfs nobody writes to;
+ignore it.
 
 To populate the library by hand, copy a complete Calibre directory tree
 into `/data/app_data/calibre-web/books/` (preserving `metadata.db` and
@@ -56,9 +65,11 @@ admin UI.
   account you've created via the admin UI ("Users" -> "Create New
   User").
 - **Recovery.** The randomised admin password is stored in
-  `/data/app_data/calibre-web/config/admin-password.txt` (mode 0600,
+  `<host>/data/app_data/calibre-web/config/admin-password.txt` (mode 0600,
   owned by the container's PUID). If the auth-proxy ever gets wedged
-  and you can't log in via SSO, this is your escape hatch.
+  and you can't log in via SSO, this is your escape hatch — read the
+  file from the host (the OpenHost shell, `cat $OPENHOST_APP_DATA_DIR/config/admin-password.txt`)
+  and use the password at `/login`.
 
 ## Manifest
 

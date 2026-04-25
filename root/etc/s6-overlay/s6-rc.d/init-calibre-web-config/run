@@ -1,0 +1,80 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+#
+# OpenHost-overridden replacement for LSIO's init-calibre-web-config.
+#
+# Background: the upstream LSIO image hard-codes /config as the path for
+# Calibre-Web's app.db. /config is also declared as `VOLUME /config` in
+# the upstream Dockerfile, which means Podman creates a fresh anonymous
+# volume there on every container recreate — silently destroying the
+# user database, settings, and admin password every time we redeploy.
+#
+# We can't unset a parent image's VOLUME directive, and we can't delete
+# /config in a RUN step (the VOLUME overlay makes it busy during build).
+# Instead, we override LSIO's init script so it points everything at
+# the OpenHost-bind-mounted persistent path, leaving /config to exist
+# as an empty tmpfs nobody writes to.
+#
+# The original LSIO script:
+#  - symlinks /etc/ImageMagick-6/policy.xml to /defaults/policy.xml
+#  - creates /config/client_secrets.json (Google Drive integration)
+#  - chmods kepubify executable
+#  - chowns /config to abc:abc
+#  - on first boot, runs `cps.py -d` to seed /config/app.db, then
+#    sqlite3-patches it to set config_kepubifypath = /usr/bin/kepubify
+#
+# We do the same, but with the persistent path:
+#   /data/app_data/calibre-web/config
+# substituted everywhere /config used to appear.
+
+PERSIST="${OPENHOST_APP_DATA_DIR:-/data/app_data/calibre-web}"
+CONFIG_DIR="$PERSIST/config"
+
+# Create symlinks for imagemagick policy.xml — same as upstream.
+rm -rf /etc/ImageMagick-6/policy.xml
+ln -s /defaults/policy.xml /etc/ImageMagick-6/policy.xml
+
+# Persistent dir setup. mkdir -p is safe even if the bind-mount is
+# already populated.
+mkdir -p "$CONFIG_DIR"
+
+# Create Google drive client_secrets.json file if not present.
+if [[ ! -f "$CONFIG_DIR/client_secrets.json" ]]; then
+    echo "{}" > "$CONFIG_DIR/client_secrets.json"
+fi
+
+# Check if kepubify is present and if so make executable.
+if [[ -f /usr/bin/kepubify ]] && [[ ! -x /usr/bin/kepubify ]]; then
+    chmod +x /usr/bin/kepubify
+fi
+
+# Pre-stage some files & directories for permissions purposes.
+mkdir -p /app/calibre-web/cps/cache
+
+# Permissions: chown the persistent config dir and Calibre-Web's cache.
+# `lsiown` honours PUID/PGID set on the container.
+lsiown -R abc:abc \
+    "$CONFIG_DIR" \
+    /app/calibre-web/cps/cache
+
+# Tell Calibre-Web (and any subcommand we run) where its db lives.
+# CALIBRE_DBPATH is consumed by cps/constants.py at module import.
+export CALIBRE_DBPATH="$CONFIG_DIR"
+
+# First-boot: seed app.db by running cps.py in dry-run mode (-d).
+# This creates the schema and a default admin user.
+if [[ ! -f "$CONFIG_DIR/app.db" ]]; then
+    echo "First time run, creating app.db..."
+    cd /app/calibre-web && s6-setuidgid abc python3 /app/calibre-web/cps.py -d > /dev/null 2>&1
+    # Patch app.db with kepubify path while we have it open. Borrowed
+    # from upstream LSIO's init script (which credits crocodilestick).
+    sqlite3 "$CONFIG_DIR/app.db" <<EOS
+update settings set config_kepubifypath='/usr/bin/kepubify' where config_kepubifypath is NULL or LENGTH(config_kepubifypath)=0;
+EOS
+
+    if [[ $? == 0 ]]; then
+        echo "Successfully set kepubify paths in '$CONFIG_DIR/app.db'!"
+    elif [[ $? > 0 ]]; then
+        echo "Could not set binary paths for '$CONFIG_DIR/app.db' (see errors above)."
+    fi
+fi
