@@ -147,10 +147,39 @@ EOS
 # trivial takeover.
 if [ ! -f "$OPENHOST_INIT_SENTINEL" ]; then
     echo "[init-openhost] first-boot: randomising admin password"
-    # 32 chars of urlsafe base64 (~24 bytes of entropy). Plenty for a
-    # password we never expect a human to type.
-    NEW_PASSWORD=$(head -c 24 /dev/urandom | base64 | tr -d '\n=+/' | head -c 32)
-    if [ -z "$NEW_PASSWORD" ] || [ ${#NEW_PASSWORD} -lt 16 ]; then
+    # Calibre-Web's default password policy (config_password_policy = 1 in
+    # app.db) requires at least one uppercase, one lowercase, one digit,
+    # and one special character. We compose a 28-char password with
+    # guaranteed coverage of all four classes and append 24 random
+    # base64-derived characters for entropy. Total entropy is well over
+    # 100 bits — plenty for a password we never expect a human to type.
+    #
+    # We use Python because bash's $RANDOM is only 15 bits and not
+    # cryptographically secure. The `secrets` module pulls from
+    # /dev/urandom and gives us the bias-free choice we need.
+    NEW_PASSWORD=$(python3 -c '
+import secrets
+import string
+
+# 24 random alphanumeric chars (no '/' '+' '=' so the password is
+# easy to copy/paste through CLIs and YAML).
+alphabet = string.ascii_letters + string.digits
+random_part = "".join(secrets.choice(alphabet) for _ in range(24))
+
+# Guaranteed coverage of every character class Calibre-Web's default
+# policy enforces: uppercase, lowercase, digit, and special.
+required = ["A", "a", "0", "!"]
+
+# Splice the required chars into deterministic positions inside the
+# random part so an observer of the password format learns nothing
+# about the random component, but the policy is satisfied
+# regardless of what `secrets.choice` returned.
+combined = list(random_part)
+for char in required:
+    combined.insert(secrets.randbelow(len(combined) + 1), char)
+print("".join(combined))
+')
+    if [ -z "$NEW_PASSWORD" ] || [ ${#NEW_PASSWORD} -lt 20 ]; then
         echo "[init-openhost] failed to generate random password (got ${#NEW_PASSWORD} chars)"
         exit 1
     fi
