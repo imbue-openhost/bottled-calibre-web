@@ -42,9 +42,12 @@ regardless of which paths are public.
 
 We strip any inbound `X-Openhost-User` header on every request so a
 hostile client cannot inject auth by setting it themselves. Calibre-Web
-itself binds 127.0.0.1:8084 only (set in app.db's config_port +
-config_ipaddress via init-openhost-calibre-web), so external traffic
-must traverse this sidecar to reach the upstream.
+binds *:8083 inside the container (its LSIO default — we leave it
+untouched so the LSIO `nc -z localhost 8083` readiness probe still
+fires), but the OpenHost router only routes traffic to the
+openhost.toml-declared port 8080 (this sidecar). External clients
+therefore cannot reach Calibre-Web's 8083 directly: the sidecar is on
+the only externally-reachable port.
 
 We also rewrite the `Host` header from `X-Forwarded-Host`. Calibre-Web
 uses Flask, which by default trusts request.host for URL generation
