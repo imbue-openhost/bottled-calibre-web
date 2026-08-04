@@ -8,10 +8,11 @@ admin/user management.
 ## Features
 
 - **Owner SSO via OpenHost.** Owners are auto-logged-in as the Calibre-Web
-  `admin` user via the bundled auth-proxy sidecar. The proxy verifies the
-  `zone_auth` JWT signed by the OpenHost router (RS256 against the
-  router's published JWKS) and stamps `X-Openhost-User: admin` on the
-  upstream request when the claim `sub == "owner"` checks out.
+  `admin` user via the bundled auth-proxy sidecar. The proxy trusts the
+  `X-OpenHost-Is-Owner: true` header the OpenHost router stamps on requests
+  from an authenticated zone owner (the router strips any client-supplied
+  `X-OpenHost-*` headers first, so it cannot be spoofed) and stamps
+  `X-Openhost-User: admin` on the upstream request.
 - **Username/password fallback for invited readers.** Calibre-Web's normal
   login form at `/login` still works, so you can mint shared accounts for
   family members or co-owners who don't have an OpenHost identity. The
@@ -59,7 +60,7 @@ admin UI.
 ## Login
 
 - **Owner.** Browse to the app URL while signed in to OpenHost as the
-  zone owner. The auth-proxy will recognise the `zone_auth` cookie and
+  zone owner. The auth-proxy will recognise the router's owner header and
   log you in as `admin` automatically.
 - **Other users.** Visit `/login` and enter the username/password of an
   account you've created via the admin UI ("Users" -> "Create New

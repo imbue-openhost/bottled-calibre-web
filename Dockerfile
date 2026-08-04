@@ -29,35 +29,18 @@ FROM lscr.io/linuxserver/calibre-web:0.6.26-ls379
 #   - root/etc/s6-overlay/s6-rc.d/svc-calibre-web/run
 #     (overrides LSIO's service start to set CALIBRE_DBPATH there)
 
-# Runtime additions on top of the LSIO image:
-#
-#   python3-pip - needed once during build to populate the auth-venv,
-#                 then removed to keep the image lean.
-#
-# python3 + python3-venv are already installed by LSIO (they ship the
-# /lsiopy venv that calibre-web itself runs from). sqlite3 is also
-# already present (LSIO uses it in init-calibre-web-config to seed
-# kepubify paths).
-#
-# We install PyJWT (with the cryptography extra for RS256) and requests
-# inside a *separate* venv at /opt/auth-venv. We deliberately do not
-# touch /lsiopy because (a) we don't want our pinned versions colliding
-# with calibre-web's own dependency tree, and (b) some LSIO post-init
-# steps reach into /lsiopy expecting upstream-only contents.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends python3-pip \
- && python3 -m venv /opt/auth-venv \
- && /opt/auth-venv/bin/pip install --no-cache-dir \
-        'PyJWT[crypto]==2.9.0' \
-        'requests==2.32.3' \
- && apt-get -y purge python3-pip \
- && apt-get -y autoremove \
- && rm -rf /var/lib/apt/lists/* /root/.cache /tmp/*
+# The auth-proxy sidecar is implemented entirely with the Python standard
+# library (http.server + http.client), so there are no third-party
+# dependencies to install. python3 is already present in the LSIO base
+# image (it ships the /lsiopy venv that calibre-web itself runs from, plus
+# a system python3), and sqlite3 is present too (LSIO uses it in
+# init-calibre-web-config to seed kepubify paths).
 
 # Auth-proxy sidecar. Listens on 0.0.0.0:8080 (the openhost.toml-declared
 # port) and forwards to Calibre-Web on 127.0.0.1:8083 with an
-# X-Openhost-User: admin header stamped when the request carries a valid
-# router-signed owner JWT. See auth_proxy.py for the full rationale.
+# X-Openhost-User: admin header stamped when the OpenHost router marks the
+# request as coming from the zone owner (X-OpenHost-Is-Owner: true). See
+# auth_proxy.py for the full rationale.
 COPY auth_proxy.py /app/auth_proxy.py
 
 # An empty Calibre library schema, taken verbatim from upstream Calibre's
