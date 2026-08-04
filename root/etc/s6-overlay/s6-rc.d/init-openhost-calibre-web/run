@@ -28,6 +28,7 @@
 #        - config_calibre_dir = $PERSIST/books
 #        - config_allow_reverse_proxy_header_login = 1
 #        - config_reverse_proxy_login_header_name = X-Openhost-User
+#        - config_uploading = 1 (enable book uploads out of the box)
 #   3. Randomise the admin user's password on first boot and persist it
 #      to admin-password.txt. This removes the upstream default of
 #      admin/admin123, which is a security disaster on a public-facing
@@ -122,13 +123,22 @@ fi
 # OpenHost router only routes traffic to the openhost.toml-declared
 # port, so calibre-web's 8083 is unreachable from outside the
 # container regardless of the bind address.
+# config_uploading = 1 turns on Calibre-Web's "Enable Uploads" setting so
+# the owner can add books through the web UI's upload button immediately,
+# without first flipping the toggle in Admin -> Basic Configuration ->
+# Feature Configuration. The admin user (which the owner is auto-logged in
+# as) already carries the ROLE_UPLOAD permission bit by default, so this
+# global toggle is all that's needed for uploads to work out of the box.
+# We set it in the same idempotent UPDATE so it re-converges on every boot
+# even if someone toggles it off through the admin UI.
 echo "[init-openhost] patching $APP_DB settings"
 BOOKS_DIR_FOR_SQL=${BOOKS_DIR//\'/\'\'}
 sqlite3 "$APP_DB" <<EOS
 UPDATE settings SET
     config_calibre_dir = '$BOOKS_DIR_FOR_SQL',
     config_allow_reverse_proxy_header_login = 1,
-    config_reverse_proxy_login_header_name = 'X-Openhost-User'
+    config_reverse_proxy_login_header_name = 'X-Openhost-User',
+    config_uploading = 1
 WHERE id = 1;
 EOS
 

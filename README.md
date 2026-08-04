@@ -22,6 +22,10 @@ admin/user management.
   `/books/metadata.db` so Calibre-Web skips its setup wizard and lands you
   on the (empty) book list immediately. Drop EPUBs and PDFs in via the
   web UI's upload button or by writing them to the persistent volume.
+- **Uploads enabled out of the box.** Calibre-Web's "Enable Uploads"
+  setting (`config_uploading`) is turned on during init, so the owner can
+  add books through the web UI's upload button without first flipping the
+  toggle in the admin settings.
 - **Persistent state.** Both `app.db` (settings, users, downloads) and
   the Calibre library files live under `OPENHOST_APP_DATA_DIR` and
   survive container rebuilds.
