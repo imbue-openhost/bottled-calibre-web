@@ -1,21 +1,21 @@
-# openhost-calibre-web
+# bottled-calibre-web
 
-[Calibre-Web](https://github.com/janeczku/calibre-web) packaged for OpenHost.
+[Calibre-Web](https://github.com/janeczku/calibre-web) packaged for Cloud in a Bottle.
 Calibre-Web is a Flask web app that serves an existing Calibre ebook library
 over the web with a clean reading UI, OPDS feed, sync support, and
 admin/user management.
 
 ## Features
 
-- **Owner SSO via OpenHost.** Owners are auto-logged-in as the Calibre-Web
+- **Owner SSO via Cloud in a Bottle.** Owners are auto-logged-in as the Calibre-Web
   `admin` user via the bundled auth-proxy sidecar. The proxy trusts the
-  `X-OpenHost-Is-Owner: true` header the OpenHost router stamps on requests
+  `X-OpenHost-Is-Owner: true` header the Cloud in a Bottle router stamps on requests
   from an authenticated zone owner (the router strips any client-supplied
   `X-OpenHost-*` headers first, so it cannot be spoofed) and stamps
   `X-Openhost-User: admin` on the upstream request.
 - **Username/password fallback for invited readers.** Calibre-Web's normal
   login form at `/login` still works, so you can mint shared accounts for
-  family members or co-owners who don't have an OpenHost identity. The
+  family members or co-owners who don't have a Cloud in a Bottle identity. The
   default `admin` password is randomised at first boot — see
   `admin-password.txt` below for recovery.
 - **Empty library on first boot.** A blank Calibre library is seeded at
@@ -32,7 +32,7 @@ admin/user management.
 
 ## Persistent layout
 
-OpenHost bind-mounts the app's data directory at `/data/app_data/calibre-web`
+Cloud in a Bottle bind-mounts the app's data directory at `/data/app_data/calibre-web`
 inside the container. The LSIO image normally writes everything to
 `/config`, but `/config` is a `VOLUME` in the upstream Dockerfile —
 which Podman would back with an anonymous volume that disappears on
@@ -58,12 +58,12 @@ ignore it.
 
 To populate the library by hand, copy a complete Calibre directory tree
 into `/data/app_data/calibre-web/books/` (preserving `metadata.db` and
-all author/title subdirectories) and reload the app from the OpenHost
+all author/title subdirectories) and reload the app from the Cloud in a Bottle
 admin UI.
 
 ## Login
 
-- **Owner.** Browse to the app URL while signed in to OpenHost as the
+- **Owner.** Browse to the app URL while signed in to Cloud in a Bottle as the
   zone owner. The auth-proxy will recognise the router's owner header and
   log you in as `admin` automatically.
 - **Other users.** Visit `/login` and enter the username/password of an
@@ -73,7 +73,7 @@ admin UI.
   `<host>/data/app_data/calibre-web/config/admin-password.txt` (mode 0600,
   owned by the LSIO `abc` user, which defaults to UID 911). If the
   auth-proxy ever gets wedged and you can't log in via SSO, this is
-  your escape hatch — read the file from the host (the OpenHost shell,
+  your escape hatch — read the file from the host (the Cloud in a Bottle shell,
   `cat $OPENHOST_APP_DATA_DIR/config/admin-password.txt`) and use the
   password at `/login`.
 
@@ -93,7 +93,7 @@ admin UI.
 - **Library starts empty.** If you have an existing Calibre library on
   another machine, you'll need to copy `metadata.db` and the book
   subdirectories into `/data/app_data/calibre-web/books/` yourself
-  (e.g. via scp + the OpenHost host shell, or by mounting the volume
+  (e.g. via scp + the Cloud in a Bottle host shell, or by mounting the volume
   on the host).
 - **Ebook conversion is not enabled.** The LSIO image supports a Calibre
   Docker mod (`linuxserver/mods:universal-calibre`) that adds the Calibre
