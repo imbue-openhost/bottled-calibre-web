@@ -1,7 +1,7 @@
 [app]
 name = "calibre-web"
 version = "0.1.0"
-description = "Calibre-Web ebook server with OpenHost owner SSO"
+description = "Calibre-Web ebook server with Cloud in a Bottle owner SSO"
 
 [runtime.container]
 image = "Dockerfile"
